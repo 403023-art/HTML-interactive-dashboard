@@ -1,0 +1,703 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Low Leave Monitoring Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js"></script>
+<style>
+  body { font-family: 'Segoe UI', ui-sans-serif, system-ui, sans-serif; }
+  table { border-collapse: separate; border-spacing: 0; }
+  th { position: sticky; top: 0; z-index: 10; }
+  td[contenteditable="true"]:focus, td[contenteditable="true"]:hover {
+    outline: 2px solid #6366f1;
+    outline-offset: -2px;
+    background-color: #eef2ff;
+  }
+  .indicator-dot { width: 10px; height: 10px; border-radius: 9999px; display: inline-block; }
+  .alert-card { cursor: pointer; transition: all .15s ease; user-select: none; }
+  .alert-card:hover { transform: translateY(-1px); box-shadow: 0 4px 10px rgba(0,0,0,.06); }
+  .alert-card.active { box-shadow: 0 0 0 2px currentColor inset; }
+  select { min-width: 0; }
+  ::-webkit-scrollbar { height: 10px; width: 10px; }
+  ::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 9999px; }
+  ::-webkit-scrollbar-track { background: #f1f5f9; }
+  #toast { transition: opacity .2s ease, transform .2s ease; }
+</style>
+</head>
+<body class="bg-slate-100 min-h-screen text-slate-800">
+
+  <!-- Top bar -->
+  <header class="bg-slate-900 text-white px-6 py-4 shadow-md">
+    <div class="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <h1 class="text-xl font-semibold tracking-tight">Low Leave Monitoring Dashboard</h1>
+        <p class="text-slate-400 text-sm">One row per employee — switch the viewing month/year to see that period's leave data</p>
+      </div>
+      <div class="flex items-center gap-4 text-sm">
+        <div class="flex items-center gap-2">
+          <span class="indicator-dot bg-red-500"></span><span class="text-slate-300">EL ≤ 0</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="indicator-dot bg-orange-500"></span><span class="text-slate-300">EL ≤ 15</span>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="indicator-dot bg-green-500"></span><span class="text-slate-300">EL &gt; 15</span>
+        </div>
+      </div>
+    </div>
+  </header>
+
+  <main class="p-6">
+
+    <!-- Controls -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 p-4 mb-4">
+      <div class="flex flex-wrap items-end gap-4">
+
+        <!-- File upload -->
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-medium text-slate-500 uppercase tracking-wide">Import employee data</label>
+          <div class="flex items-center gap-2">
+            <label class="cursor-pointer inline-flex items-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-medium px-3 py-2 rounded-md transition">
+              <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                <path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zm3.293-7.707a1 1 0 011.414 0L9 10.586V3a1 1 0 112 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 010-1.414z" clip-rule="evenodd"/>
+              </svg>
+              Upload Excel (.xlsx / .xls)
+              <input id="fileInput" type="file" accept=".xlsx,.xls" class="hidden">
+            </label>
+            <span id="fileName" class="text-xs text-slate-500"></span>
+          </div>
+        </div>
+
+        <!-- Viewing Month (global) -->
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-medium text-slate-500 uppercase tracking-wide">Viewing month</label>
+          <select id="monthSelector" class="border border-slate-300 rounded-md px-3 py-2 text-sm bg-white min-w-[130px]"></select>
+        </div>
+
+        <!-- Viewing Year (global) -->
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-medium text-slate-500 uppercase tracking-wide">Viewing year</label>
+          <select id="yearSelector" class="border border-slate-300 rounded-md px-3 py-2 text-sm bg-white min-w-[90px]"></select>
+        </div>
+
+        <!-- Status filter -->
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-medium text-slate-500 uppercase tracking-wide">Case status</label>
+          <select id="statusFilter" class="border border-slate-300 rounded-md px-3 py-2 text-sm bg-white">
+            <option value="All">All Status</option>
+            <option value="Open">Open</option>
+            <option value="Closed">Closed</option>
+          </select>
+        </div>
+
+        <!-- Attendance filter -->
+        <div class="flex flex-col gap-1">
+          <label class="text-xs font-medium text-slate-500 uppercase tracking-wide">Attendance</label>
+          <select id="attendanceFilter" class="border border-slate-300 rounded-md px-3 py-2 text-sm bg-white">
+            <option value="All">All Attendance Types</option>
+            <option>Mostly Regular</option>
+            <option>Mostly Irregular</option>
+            <option>Site Posted</option>
+            <option>Absent</option>
+            <option>Leave</option>
+          </select>
+        </div>
+
+        <div class="flex-1"></div>
+
+        <!-- Action buttons -->
+        <div class="flex items-center gap-2">
+          <button id="addRowBtn" type="button" class="inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-3 py-2 rounded-md transition">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M10 5a1 1 0 011 1v3h3a1 1 0 110 2h-3v3a1 1 0 11-2 0v-3H6a1 1 0 110-2h3V6a1 1 0 011-1z" clip-rule="evenodd"/></svg>
+            Add Employee
+          </button>
+          <button id="exportBtn" type="button" class="inline-flex items-center gap-1.5 bg-slate-800 hover:bg-slate-900 text-white text-sm font-medium px-3 py-2 rounded-md transition">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M3 17a1 1 0 011-1h12a1 1 0 110 2H4a1 1 0 01-1-1zM9 3a1 1 0 012 0v7.586l1.293-1.293a1 1 0 111.414 1.414l-3 3a1 1 0 01-1.414 0l-3-3a1 1 0 111.414-1.414L9 10.586V3z" clip-rule="evenodd"/></svg>
+            Export to Excel
+          </button>
+        </div>
+      </div>
+      <p class="text-xs text-slate-400 mt-3">
+        Each employee has exactly one row. "Viewing month/year" switches the leave data shown for every row at once; the Month/Year dropdowns inside a row let you peek at (or enter) that one employee's data for a different period without affecting the rest of the table.
+      </p>
+    </div>
+
+    <!-- Summary strip / clickable alert filters -->
+    <div class="grid grid-cols-2 sm:grid-cols-5 gap-3 mb-4">
+      <div class="bg-white border border-slate-200 rounded-lg p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">Total employees</div>
+        <div id="statTotal" class="text-2xl font-semibold text-slate-800">0</div>
+      </div>
+      <div class="bg-white border border-slate-200 rounded-lg p-3">
+        <div class="text-xs text-slate-500 uppercase tracking-wide">Visible rows</div>
+        <div id="statVisible" class="text-2xl font-semibold text-slate-800">0</div>
+      </div>
+      <div id="cardRed" data-alert="Red" class="alert-card bg-white border border-red-200 rounded-lg p-3 text-red-600">
+        <div class="text-xs uppercase tracking-wide flex items-center justify-between">
+          <span>Red alerts</span>
+          <span class="text-[10px] normal-case text-red-400">click to filter</span>
+        </div>
+        <div id="statRed" class="text-2xl font-semibold">0</div>
+      </div>
+      <div id="cardOrange" data-alert="Orange" class="alert-card bg-white border border-orange-200 rounded-lg p-3 text-orange-600">
+        <div class="text-xs uppercase tracking-wide flex items-center justify-between">
+          <span>Orange alerts</span>
+          <span class="text-[10px] normal-case text-orange-400">click to filter</span>
+        </div>
+        <div id="statOrange" class="text-2xl font-semibold">0</div>
+      </div>
+      <div id="cardGreen" data-alert="Green" class="alert-card bg-white border border-green-200 rounded-lg p-3 text-green-600">
+        <div class="text-xs uppercase tracking-wide flex items-center justify-between">
+          <span>Green (healthy)</span>
+          <span class="text-[10px] normal-case text-green-400">click to filter</span>
+        </div>
+        <div id="statGreen" class="text-2xl font-semibold">0</div>
+      </div>
+    </div>
+
+    <div id="activeAlertBanner" class="hidden mb-3 text-sm bg-indigo-50 text-indigo-700 border border-indigo-200 rounded-md px-3 py-2 flex items-center justify-between">
+      <span id="activeAlertText"></span>
+      <button id="clearAlertFilter" type="button" class="text-indigo-600 hover:text-indigo-900 underline text-xs">Reset</button>
+    </div>
+
+    <!-- Table -->
+    <div class="bg-white rounded-lg shadow-sm border border-slate-200 overflow-auto max-h-[65vh]">
+      <table class="min-w-full text-sm">
+        <thead class="bg-slate-800 text-white text-xs uppercase tracking-wide">
+          <tr>
+            <th class="px-3 py-3 text-left w-12">SN</th>
+            <th class="px-3 py-3 text-left min-w-[110px]">Status</th>
+            <th class="px-3 py-3 text-left min-w-[100px]">Emp No</th>
+            <th class="px-3 py-3 text-left min-w-[150px]">Name</th>
+            <th class="px-3 py-3 text-left min-w-[140px]">Designation</th>
+            <th class="px-3 py-3 text-left min-w-[130px]">SBU</th>
+            <th class="px-3 py-3 text-left min-w-[130px]">Posting</th>
+            <th class="px-3 py-3 text-left min-w-[110px]">Type</th>
+            <th class="px-3 py-3 text-left min-w-[120px]">Month</th>
+            <th class="px-3 py-3 text-left min-w-[90px]">Year</th>
+            <th class="px-3 py-3 text-left w-24">EL Bal</th>
+            <th class="px-3 py-3 text-left w-24">HPL Bal</th>
+            <th class="px-3 py-3 text-left w-20">Alert</th>
+            <th class="px-3 py-3 text-left min-w-[150px]">Attendance</th>
+            <th class="px-3 py-3 text-left w-16"></th>
+          </tr>
+        </thead>
+        <tbody id="tableBody" class="divide-y divide-slate-100"></tbody>
+      </table>
+    </div>
+
+    <p id="emptyState" class="text-center text-slate-400 text-sm py-10 hidden">
+      No employees yet. Upload an Excel file or click "Add Employee" to get started.
+    </p>
+
+  </main>
+
+  <div id="toast" class="fixed bottom-5 right-5 bg-slate-900 text-white text-sm px-4 py-2.5 rounded-md shadow-lg opacity-0 pointer-events-none translate-y-2"></div>
+
+<script>
+  const MONTHS = ['January','February','March','April','May','June','July','August','September','October','November','December'];
+  const YEARS = [2024, 2025, 2026, 2027];
+  const TYPE_OPTIONS = ['Regular', 'Contract'];
+  const ATTENDANCE_OPTIONS = ['Mostly Regular','Mostly Irregular','Site Posted','Absent','Leave'];
+
+  let employees = [];
+  let nextId = 1;
+  let alertFilter = null; // null | 'Red' | 'Orange' | 'Green'
+
+  const monthSelector = document.getElementById('monthSelector');
+  const yearSelector = document.getElementById('yearSelector');
+  const statusFilter = document.getElementById('statusFilter');
+  const attendanceFilter = document.getElementById('attendanceFilter');
+  const tableBody = document.getElementById('tableBody');
+  const emptyState = document.getElementById('emptyState');
+  const activeAlertBanner = document.getElementById('activeAlertBanner');
+  const activeAlertText = document.getElementById('activeAlertText');
+
+  function fillOptions(select, values) {
+    select.innerHTML = '';
+    values.forEach(v => {
+      const opt = document.createElement('option');
+      opt.value = v;
+      opt.textContent = v;
+      select.appendChild(opt);
+    });
+  }
+  fillOptions(monthSelector, MONTHS);
+  monthSelector.value = 'August';
+  fillOptions(yearSelector, YEARS);
+  yearSelector.value = 2026;
+
+  const periodKey = (month, year) => `${month}-${year}`;
+  const seqOf = (month, year) => Number(year) * 12 + MONTHS.indexOf(month);
+
+  function defaultPeriod() {
+    return { el: 0, hpl: 0, status: 'Open', attendance: 'Mostly Regular' };
+  }
+
+  function getOrCreatePeriod(emp, month, year) {
+    const k = periodKey(month, year);
+    if (!emp.periods[k]) emp.periods[k] = defaultPeriod();
+    return emp.periods[k];
+  }
+
+  function currentPeriod(emp) {
+    return getOrCreatePeriod(emp, emp.viewMonth, emp.viewYear);
+  }
+
+  // Returns { month, year, data } for the most recent month/year this employee has a record for.
+  function latestPeriodOf(emp) {
+    const keys = Object.keys(emp.periods);
+    if (keys.length === 0) return { month: emp.viewMonth, year: emp.viewYear, data: currentPeriod(emp) };
+    let best = null;
+    keys.forEach(k => {
+      const [month, year] = k.split('-');
+      const s = seqOf(month, Number(year));
+      if (!best || s > best.seq) best = { month, year: Number(year), seq: s, data: emp.periods[k] };
+    });
+    return best;
+  }
+
+  // Every recorded period for this employee as a sorted, flat list (oldest to newest).
+  function allPeriodsOf(emp) {
+    return Object.keys(emp.periods)
+      .map(k => {
+        const [month, year] = k.split('-');
+        return { month, year: Number(year), seq: seqOf(month, Number(year)), data: emp.periods[k] };
+      })
+      .sort((a, b) => a.seq - b.seq);
+  }
+
+  function newEmployee(data = {}) {
+    const emp = {
+      id: nextId++,
+      empNo: data.empNo || '',
+      name: data.name || '',
+      designation: data.designation || '',
+      sbu: data.sbu || '',
+      posting: data.posting || '',
+      type: TYPE_OPTIONS.includes(data.type) ? data.type : 'Regular',
+      periods: {},
+      viewMonth: monthSelector.value,
+      viewYear: Number(yearSelector.value)
+    };
+    const p = getOrCreatePeriod(emp, emp.viewMonth, emp.viewYear);
+    if (data.el !== undefined) p.el = data.el;
+    if (data.hpl !== undefined) p.hpl = data.hpl;
+    if (data.status) p.status = data.status;
+    if (data.attendance) p.attendance = data.attendance;
+    return emp;
+  }
+
+  function indicatorFor(el) {
+    el = Number(el);
+    if (isNaN(el)) el = 0;
+    if (el <= 0) return { color: 'bg-red-500', label: 'Red', text: 'text-red-600' };
+    if (el <= 15) return { color: 'bg-orange-500', label: 'Orange', text: 'text-orange-600' };
+    return { color: 'bg-green-500', label: 'Green', text: 'text-green-600' };
+  }
+
+  function getEmployee(id) { return employees.find(e => e.id === id); }
+
+  function findEmployeeByEmpNo(empNo) {
+    const k = (empNo || '').trim().toLowerCase();
+    if (!k) return null;
+    return employees.find(e => (e.empNo || '').trim().toLowerCase() === k) || null;
+  }
+
+  // Auto-close rule: 3 consecutive recorded months of Green alert -> that period's Case Status = Closed
+  function applyAutoCloseRule() {
+    employees.forEach(emp => {
+      const periodEntries = Object.keys(emp.periods).map(k => {
+        const [month, year] = k.split('-');
+        return { key: k, month, year: Number(year), data: emp.periods[k] };
+      });
+      periodEntries.sort((a, b) => seqOf(a.month, a.year) - seqOf(b.month, b.year));
+
+      let streak = 0;
+      let prevSeq = null;
+      periodEntries.forEach(p => {
+        const isGreen = indicatorFor(p.data.el).label === 'Green';
+        const s = seqOf(p.month, p.year);
+        const consecutive = prevSeq === null || s === prevSeq + 1;
+        if (isGreen && consecutive) streak += 1;
+        else if (isGreen && !consecutive) streak = 1;
+        else streak = 0;
+        if (streak >= 3) p.data.status = 'Closed';
+        prevSeq = s;
+      });
+    });
+  }
+
+  function passesFilters(emp) {
+    const p = currentPeriod(emp);
+    if (statusFilter.value !== 'All' && p.status !== statusFilter.value) return false;
+    if (attendanceFilter.value !== 'All' && p.attendance !== attendanceFilter.value) return false;
+    if (alertFilter && indicatorFor(p.el).label !== alertFilter) return false;
+    return true;
+  }
+
+  function escapeHtml(str) {
+    return String(str ?? '').replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+  function showToast(msg) {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.classList.remove('opacity-0', 'translate-y-2');
+    clearTimeout(showToast._t);
+    showToast._t = setTimeout(() => {
+      toast.classList.add('opacity-0', 'translate-y-2');
+    }, 2200);
+  }
+
+  function render() {
+    applyAutoCloseRule();
+
+    const visible = employees.filter(passesFilters);
+    tableBody.innerHTML = '';
+    emptyState.classList.toggle('hidden', employees.length !== 0);
+
+    let red = 0, orange = 0, green = 0;
+    employees.forEach(emp => {
+      const label = indicatorFor(currentPeriod(emp).el).label;
+      if (label === 'Red') red++; else if (label === 'Orange') orange++; else green++;
+    });
+
+    visible.forEach((emp, idx) => {
+      const p = currentPeriod(emp);
+      const ind = indicatorFor(p.el);
+
+      const tr = document.createElement('tr');
+      tr.className = 'hover:bg-slate-50 transition-colors';
+      tr.dataset.id = emp.id;
+      tr.innerHTML = `
+        <td class="px-3 py-2 text-slate-400">${idx + 1}</td>
+        <td class="px-3 py-2">
+          <select data-field="status" class="w-full min-w-[100px] border border-slate-200 rounded px-2 py-1.5 text-sm ${p.status==='Open' ? 'bg-amber-50' : 'bg-slate-50'}">
+            <option ${p.status==='Open'?'selected':''}>Open</option>
+            <option ${p.status==='Closed'?'selected':''}>Closed</option>
+          </select>
+        </td>
+        <td class="px-3 py-2" contenteditable="true" data-field="empNo">${escapeHtml(emp.empNo)}</td>
+        <td class="px-3 py-2 font-medium" contenteditable="true" data-field="name">${escapeHtml(emp.name)}</td>
+        <td class="px-3 py-2" contenteditable="true" data-field="designation">${escapeHtml(emp.designation)}</td>
+        <td class="px-3 py-2" contenteditable="true" data-field="sbu">${escapeHtml(emp.sbu)}</td>
+        <td class="px-3 py-2" contenteditable="true" data-field="posting">${escapeHtml(emp.posting)}</td>
+        <td class="px-3 py-2">
+          <select data-field="type" class="w-full min-w-[95px] border border-slate-200 rounded px-2 py-1.5 text-sm bg-white">
+            ${TYPE_OPTIONS.map(t => `<option ${emp.type===t?'selected':''}>${t}</option>`).join('')}
+          </select>
+        </td>
+        <td class="px-3 py-2">
+          <select data-field="month" class="w-full min-w-[105px] border border-slate-200 rounded px-2 py-1.5 text-sm bg-white">
+            ${MONTHS.map(m => `<option ${emp.viewMonth===m?'selected':''}>${m}</option>`).join('')}
+          </select>
+        </td>
+        <td class="px-3 py-2">
+          <select data-field="year" class="w-full min-w-[80px] border border-slate-200 rounded px-2 py-1.5 text-sm bg-white">
+            ${YEARS.map(y => `<option ${Number(emp.viewYear)===y?'selected':''}>${y}</option>`).join('')}
+          </select>
+        </td>
+        <td class="px-3 py-2">
+          <input type="number" data-field="el" value="${p.el}" class="w-16 border border-slate-200 rounded px-2 py-1.5 text-sm">
+        </td>
+        <td class="px-3 py-2">
+          <input type="number" data-field="hpl" value="${p.hpl}" class="w-16 border border-slate-200 rounded px-2 py-1.5 text-sm">
+        </td>
+        <td class="px-3 py-2">
+          <span class="inline-flex items-center gap-1.5 ${ind.text} text-xs font-medium">
+            <span class="indicator-dot ${ind.color}"></span>${ind.label}
+          </span>
+        </td>
+        <td class="px-3 py-2">
+          <select data-field="attendance" class="w-full min-w-[135px] border border-slate-200 rounded px-2 py-1.5 text-sm bg-white">
+            ${ATTENDANCE_OPTIONS.map(a => `<option ${p.attendance===a?'selected':''}>${a}</option>`).join('')}
+          </select>
+        </td>
+        <td class="px-3 py-2 text-center">
+          <button type="button" data-action="delete" data-id="${emp.id}" class="text-red-500 hover:text-red-700 hover:bg-red-50 rounded p-1" title="Delete employee">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 pointer-events-none" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm4 0a1 1 0 012 0v6a1 1 0 11-2 0V8z" clip-rule="evenodd"/></svg>
+          </button>
+        </td>
+      `;
+      tableBody.appendChild(tr);
+    });
+
+    document.getElementById('statTotal').textContent = employees.length;
+    document.getElementById('statVisible').textContent = visible.length;
+    document.getElementById('statRed').textContent = red;
+    document.getElementById('statOrange').textContent = orange;
+    document.getElementById('statGreen').textContent = green;
+
+    ['cardRed', 'cardOrange', 'cardGreen'].forEach(id => document.getElementById(id).classList.remove('active'));
+    if (alertFilter) {
+      document.getElementById('card' + alertFilter).classList.add('active');
+      activeAlertBanner.classList.remove('hidden');
+      activeAlertText.textContent = `Showing only ${alertFilter} alert rows (for each employee's currently viewed month/year).`;
+    } else {
+      activeAlertBanner.classList.add('hidden');
+    }
+  }
+
+  // ---- Edits inside the table ----
+  tableBody.addEventListener('input', (e) => {
+    if (e.target.tagName !== 'TD') return;
+    const tr = e.target.closest('tr');
+    if (!tr) return;
+    const emp = getEmployee(Number(tr.dataset.id));
+    if (!emp) return;
+    const field = e.target.dataset.field;
+    if (!field) return;
+    emp[field] = e.target.textContent.trim();
+  });
+
+  tableBody.addEventListener('change', (e) => {
+    const tr = e.target.closest('tr');
+    if (!tr) return;
+    const emp = getEmployee(Number(tr.dataset.id));
+    if (!emp) return;
+    const field = e.target.dataset.field;
+    if (!field) return;
+
+    if (field === 'month') {
+      emp.viewMonth = e.target.value;
+      getOrCreatePeriod(emp, emp.viewMonth, emp.viewYear);
+    } else if (field === 'year') {
+      emp.viewYear = Number(e.target.value);
+      getOrCreatePeriod(emp, emp.viewMonth, emp.viewYear);
+    } else if (field === 'el' || field === 'hpl') {
+      currentPeriod(emp)[field] = e.target.value === '' ? 0 : Number(e.target.value);
+    } else if (field === 'status' || field === 'attendance') {
+      currentPeriod(emp)[field] = e.target.value;
+    } else {
+      emp[field] = e.target.value; // type
+    }
+    render();
+  });
+
+  // Delete employee row
+  tableBody.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-action="delete"]');
+    if (!btn) return;
+    e.preventDefault();
+    const id = Number(btn.dataset.id);
+    employees = employees.filter(e => e.id !== id);
+    render();
+    showToast('Employee removed.');
+  });
+
+  document.getElementById('addRowBtn').addEventListener('click', () => {
+    employees.push(newEmployee());
+    render();
+  });
+
+  [statusFilter, attendanceFilter].forEach(el => el.addEventListener('change', render));
+
+  // Global Viewing Month/Year: syncs every row's displayed period at once
+  function syncAllRowsToGlobalPeriod() {
+    employees.forEach(emp => {
+      emp.viewMonth = monthSelector.value;
+      emp.viewYear = Number(yearSelector.value);
+      getOrCreatePeriod(emp, emp.viewMonth, emp.viewYear);
+    });
+    render();
+  }
+  monthSelector.addEventListener('change', syncAllRowsToGlobalPeriod);
+  yearSelector.addEventListener('change', syncAllRowsToGlobalPeriod);
+
+  // Clickable alert cards (toggle filter)
+  [['cardRed','Red'], ['cardOrange','Orange'], ['cardGreen','Green']].forEach(([id, label]) => {
+    document.getElementById(id).addEventListener('click', () => {
+      alertFilter = (alertFilter === label) ? null : label;
+      render();
+    });
+  });
+  document.getElementById('clearAlertFilter').addEventListener('click', () => {
+    alertFilter = null;
+    render();
+  });
+
+  // ---- Excel import (merges into existing employee if Emp No already exists) ----
+  document.getElementById('fileInput').addEventListener('change', (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    document.getElementById('fileName').textContent = file.name;
+
+    const reader = new FileReader();
+    reader.onload = (evt) => {
+      try {
+        const data = new Uint8Array(evt.target.result);
+        const wb = XLSX.read(data, { type: 'array' });
+        const sheet = wb.Sheets[wb.SheetNames[0]];
+        const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
+
+        const norm = (obj, keys) => {
+          for (const k of Object.keys(obj)) {
+            const kk = k.trim().toUpperCase();
+            for (const target of keys) {
+              if (kk === target) return obj[k];
+            }
+          }
+          return '';
+        };
+
+        let added = 0, updated = 0;
+        json.forEach(row => {
+          const empNo = norm(row, ['EMP NO', 'EMPNO', 'EMP. NO', 'EMPLOYEE NO']);
+          let emp = findEmployeeByEmpNo(empNo);
+          if (emp) {
+            emp.name = norm(row, ['NAME', 'EMPLOYEE NAME']) || emp.name;
+            emp.designation = norm(row, ['DESIGNATION']) || emp.designation;
+            emp.sbu = norm(row, ['ORGANISATION UNIT (SBU)', 'ORGANISATION UNIT', 'SBU', 'ORGANIZATION UNIT (SBU)']) || emp.sbu;
+            emp.posting = norm(row, ['WORK LOCATION (POSTING)', 'WORK LOCATION', 'POSTING']) || emp.posting;
+            const t = norm(row, ['TYPE']);
+            if (TYPE_OPTIONS.includes(t)) emp.type = t;
+            emp.viewMonth = monthSelector.value;
+            emp.viewYear = Number(yearSelector.value);
+            getOrCreatePeriod(emp, emp.viewMonth, emp.viewYear);
+            updated++;
+          } else {
+            employees.push(newEmployee({
+              empNo,
+              name: norm(row, ['NAME', 'EMPLOYEE NAME']),
+              designation: norm(row, ['DESIGNATION']),
+              sbu: norm(row, ['ORGANISATION UNIT (SBU)', 'ORGANISATION UNIT', 'SBU', 'ORGANIZATION UNIT (SBU)']),
+              posting: norm(row, ['WORK LOCATION (POSTING)', 'WORK LOCATION', 'POSTING']),
+              type: norm(row, ['TYPE']) || 'Regular'
+            }));
+            added++;
+          }
+        });
+
+        render();
+        showToast(`Imported: ${added} new, ${updated} updated for ${monthSelector.value} ${yearSelector.value}.`);
+      } catch (err) {
+        showToast('Could not read this file. Please check the format.');
+        console.error(err);
+      }
+      e.target.value = '';
+    };
+    reader.readAsArrayBuffer(file);
+  });
+
+  // ---- Full export: every recorded month/year for every employee, styled, two sheets ----
+  const THIN_BORDER = { style: 'thin', color: { argb: 'FFCBD5E1' } };
+  const CELL_BORDER = { top: THIN_BORDER, left: THIN_BORDER, bottom: THIN_BORDER, right: THIN_BORDER };
+  const HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1E293B' } };
+  const ALERT_FILLS = {
+    Red:    { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFCA5A5' } },
+    Orange: { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFDBA74' } },
+    Green:  { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF86EFAC' } }
+  };
+
+  function styleHeaderRow(row) {
+    row.eachCell(cell => {
+      cell.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+      cell.fill = HEADER_FILL;
+      cell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+      cell.border = CELL_BORDER;
+    });
+    row.height = 22;
+  }
+
+  function styleDataRow(row, centerCols) {
+    row.eachCell((cell, colNumber) => {
+      cell.border = CELL_BORDER;
+      cell.alignment = {
+        horizontal: centerCols.includes(colNumber) ? 'center' : 'left',
+        vertical: 'middle'
+      };
+    });
+  }
+
+  async function buildAndDownloadWorkbook() {
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'Low Leave Monitoring Dashboard';
+    wb.created = new Date();
+
+    // ---- Sheet 1: Active View / Master Summary (one row per employee, latest recorded month) ----
+    const summary = wb.addWorksheet('Active View - Master Summary', { views: [{ state: 'frozen', ySplit: 1 }] });
+    const summaryHeaders = ['SN','Status','Emp No','Name','Designation','SBU','Posting','Type',
+      'Latest Month','Latest Year','EL Balance','HPL Balance','Alert','Attendance'];
+    summary.columns = summaryHeaders.map((h, i) => ({
+      header: h,
+      width: [5,10,12,20,20,18,18,12,14,12,12,12,10,16][i] || 16
+    }));
+    styleHeaderRow(summary.getRow(1));
+
+    employees.forEach((emp, idx) => {
+      const latest = latestPeriodOf(emp);
+      const row = summary.addRow([
+        idx + 1, latest.data.status, emp.empNo, emp.name, emp.designation, emp.sbu, emp.posting, emp.type,
+        latest.month, latest.year, latest.data.el, latest.data.hpl,
+        indicatorFor(latest.data.el).label, latest.data.attendance
+      ]);
+      styleDataRow(row, [1,2,9,10,11,12,13]);
+      row.getCell(13).fill = ALERT_FILLS[indicatorFor(latest.data.el).label];
+    });
+
+    // ---- Sheet 2: Monthly History Log (flat, every recorded month/year, every employee) ----
+    const history = wb.addWorksheet('Monthly History Log', { views: [{ state: 'frozen', ySplit: 1 }] });
+    const historyHeaders = ['SN','Year','Month','Emp No','Name','EL Bal','HPL Bal','Alert','Attendance','Status'];
+    history.columns = historyHeaders.map((h, i) => ({
+      header: h,
+      width: [5,8,12,12,20,10,10,10,16,10][i] || 14
+    }));
+    styleHeaderRow(history.getRow(1));
+
+    let sn = 1;
+    employees.forEach(emp => {
+      allPeriodsOf(emp).forEach(p => {
+        const row = history.addRow([
+          sn++, p.year, p.month, emp.empNo, emp.name, p.data.el, p.data.hpl,
+          indicatorFor(p.data.el).label, p.data.attendance, p.data.status
+        ]);
+        styleDataRow(row, [1,2,3,6,7,8,10]);
+        row.getCell(8).fill = ALERT_FILLS[indicatorFor(p.data.el).label];
+      });
+    });
+
+    const buffer = await wb.xlsx.writeBuffer();
+    const blob = new Blob([buffer], { type: 'application/octet-stream' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `Low_Leave_Monitoring_Full_Export_${new Date().toISOString().slice(0,10)}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
+  document.getElementById('exportBtn').addEventListener('click', () => {
+    if (employees.length === 0) {
+      showToast('There is no data to export yet.');
+      return;
+    }
+    buildAndDownloadWorkbook()
+      .then(() => showToast('Exported full history — 2 sheets, all months & years.'))
+      .catch(err => { console.error(err); showToast('Export failed. See console for details.'); });
+  });
+
+  // Seed sample data (Rahul shows a 3-month green streak to demonstrate the auto-close rule)
+  let e1 = newEmployee({ empNo: 'E1001', name: 'Aditi Sharma', designation: 'Site Engineer', sbu: 'Infra SBU', posting: 'Delhi', type: 'Regular', el: 4, hpl: 12, status: 'Open', attendance: 'Site Posted' });
+  employees.push(e1);
+
+  let e2 = newEmployee({ empNo: 'E1002', name: 'Rahul Verma', designation: 'Project Manager', sbu: 'Power SBU', posting: 'Mumbai', type: 'Regular' });
+  e2.periods[periodKey('June', 2026)] = { el: 22, hpl: 30, status: 'Open', attendance: 'Mostly Regular' };
+  e2.periods[periodKey('July', 2026)] = { el: 20, hpl: 30, status: 'Open', attendance: 'Mostly Regular' };
+  e2.periods[periodKey('August', 2026)] = { el: 18, hpl: 30, status: 'Open', attendance: 'Mostly Regular' };
+  employees.push(e2);
+
+  let e3 = newEmployee({ empNo: 'E1003', name: 'Priya Nair', designation: 'HR Executive', sbu: 'Corporate', posting: 'Delhi', type: 'Contract', el: -2, hpl: 5, status: 'Open', attendance: 'Absent' });
+  employees.push(e3);
+
+  render();
+</script>
+</body>
+</html>
